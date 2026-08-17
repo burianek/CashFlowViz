@@ -131,11 +131,13 @@ A **different** `.xlsx` layout — three columns, matched by header name:
 | JB         |  -140000 | 2026-08-16 |
 | HALA-ZARI  |  -500000 | 2026-09-15 |
 
-- **FROM**: a unique name per row (project, person, or expense category).
-  Reused names across different months are auto-suffixed with the month for
-  uniqueness (e.g. two `HALA` rows in different months become `HALA` and
-  `HALA (ZARI 2026)`) — or just name recurring rows distinctly yourself, as
-  in the example (`HALA`, `HALA-ZARI`).
+- **FROM**: a name per row (project, person, or expense category) — doesn't
+  need to be unique. The first row for a given name is shown as-is; every
+  repeat of that name, whether on the same date or a different one, is
+  auto-numbered (`HALA`, `HALA 2`, `HALA 3`, ...) so each row still gets its
+  own node. Name recurring rows distinctly yourself (as in the example,
+  `HALA` / `HALA-ZARI`) if you'd rather control the label than have it
+  numbered.
 - **AMOUNT**: positive = income (green), negative = expense (red).
 - **DATE**: which day the amount is booked, and which **month** it's grouped
   into.

@@ -136,15 +136,15 @@ def build_graph(entries: list[FlowEntry]) -> SankeyGraph:
     nodes: dict[str, Node] = {}
     links: list[Link] = []
 
-    def unique_id(base: str, ym: tuple[int, int]) -> str:
-        if base not in nodes:
-            return base
-        candidate = f"{base} ({month_label(*ym)})"
-        n = 2
-        while candidate in nodes:
-            candidate = f"{base} ({month_label(*ym)} #{n})"
-            n += 1
-        return candidate
+    name_counts: dict[str, int] = {}
+
+    def unique_name(base: str) -> str:
+        """First use of a FROM name is shown as-is; every repeat gets a
+        running number appended (HALA, HALA 2, HALA 3, ...) so the name is
+        always unique, however many rows — same date or different — share it."""
+        count = name_counts.get(base, 0) + 1
+        name_counts[base] = count
+        return base if count == 1 else f"{base} {count}"
 
     hub_id_of: dict[tuple[int, int], str] = {}
     for ym in months:
@@ -160,16 +160,16 @@ def build_graph(entries: list[FlowEntry]) -> SankeyGraph:
         ym = (e.date.year, e.date.month)
         m_idx = month_index[ym]
         hub_id = hub_id_of[ym]
-        node_id = unique_id(e.name, ym)
+        node_id = unique_name(e.name)
         if e.amount > 0:
             nodes[node_id] = Node(
-                id=node_id, label=e.name, kind="source", column=2 * m_idx - 1, value=e.amount, date=e.date
+                id=node_id, label=node_id, kind="source", column=2 * m_idx - 1, value=e.amount, date=e.date
             )
             links.append(Link(source=node_id, target=hub_id, value=e.amount, kind="income"))
         else:
             amt = abs(e.amount)
             nodes[node_id] = Node(
-                id=node_id, label=e.name, kind="sink", column=2 * m_idx + 1, value=amt, date=e.date
+                id=node_id, label=node_id, kind="sink", column=2 * m_idx + 1, value=amt, date=e.date
             )
             links.append(Link(source=hub_id, target=node_id, value=amt, kind="expense"))
 
