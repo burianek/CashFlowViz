@@ -1,10 +1,9 @@
-"""Render balance transitions as a Sankey-style cash flow diagram in SVG.
+"""Render balance transitions as a cash flow diagram in SVG.
 
 A central "trunk" band tracks the account balance over time (its thickness is
-the balance magnitude). Every transaction is drawn as its own colored ribbon
-that either merges into the trunk (money in, thickening it) or peels off the
-trunk (money out, thinning it) at the transaction's date, connecting to a
-labeled pill above (IN) or below (OUT) the trunk.
+the balance magnitude). Every transaction is drawn as its own colored, dotted
+connector line from a labeled pill above (IN, money in) or below (OUT, money
+out) down/up to the exact point on the trunk where that transaction lands.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ TRUNK_NEGATIVE_STROKE = "#b64a48"
 
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
-MIN_RIBBON_PX = 6.0
+MIN_LABEL_W = 6.0
 STATUS_MARKER_COLOR = "#5b6472"
 PILL_H = 24
 PILL_PAD_X = 10
@@ -136,16 +135,6 @@ def _cubic_bezier(p0, p1, p2, p3, t: float) -> tuple[float, float]:
     x = mt**3 * p0[0] + 3 * mt**2 * t * p1[0] + 3 * mt * t**2 * p2[0] + t**3 * p3[0]
     y = mt**3 * p0[1] + 3 * mt**2 * t * p1[1] + 3 * mt * t**2 * p2[1] + t**3 * p3[1]
     return x, y
-
-
-def _sankey_link_path(x0, y0_top, y0_bot, x1, y1_top, y1_bot) -> str:
-    xm = (x0 + x1) / 2
-    return (
-        f"M {x0:.2f},{y0_top:.2f} "
-        f"C {xm:.2f},{y0_top:.2f} {xm:.2f},{y1_top:.2f} {x1:.2f},{y1_top:.2f} "
-        f"L {x1:.2f},{y1_bot:.2f} "
-        f"C {xm:.2f},{y1_bot:.2f} {xm:.2f},{y0_bot:.2f} {x0:.2f},{y0_bot:.2f} Z"
-    )
 
 
 def _assign_rows(intervals: list[tuple[float, float]]) -> tuple[list[int], int]:
@@ -244,7 +233,7 @@ def render_svg(
         if e.is_status:
             continue
         label = f"{e.asset}: {_format_amount(e.amount, currency, signed=True)}"
-        w = max(_estimate_text_width(label) + PILL_PAD_X * 2, MIN_RIBBON_PX)
+        w = max(_estimate_text_width(label) + PILL_PAD_X * 2, MIN_LABEL_W)
         p.label_w = w
         p.pill_x = min(max(p.x, x_left + w / 2), x_right - w / 2)
         (in_items if e.amount >= 0 else out_items).append((p, p.pill_x - w / 2, p.pill_x + w / 2, w, label))
@@ -428,32 +417,6 @@ def render_svg(
         )
     )
 
-    # ribbons (drawn under the trunk so they appear to flow into/out of it)
-    for p in placements:
-        e = p.transition.entry
-        if e.is_status:
-            continue
-        thickness = max(abs(e.amount) * (trunk_h / (max_level - min_level)), MIN_RIBBON_PX)
-        row = p.row
-        if e.amount >= 0:
-            pill_bottom = trunk_top - STEM_GAP - row * (PILL_H + ROW_GAP_Y)
-            pill_top = pill_bottom - PILL_H
-            attach_top, attach_bot = p.attach_top, p.attach_bot
-            link_d = _sankey_link_path(
-                p.pill_x, pill_bottom - thickness / 2, pill_bottom + thickness / 2, p.x, attach_top, attach_bot
-            )
-        else:
-            pill_top = trunk_bottom + STEM_GAP + row * (PILL_H + ROW_GAP_Y)
-            pill_bottom = pill_top + PILL_H
-            attach_top, attach_bot = p.attach_top, p.attach_bot
-            link_d = _sankey_link_path(
-                p.x, attach_top, attach_bot, p.pill_x, pill_top - thickness / 2, pill_top + thickness / 2
-            )
-
-        ribbon = dwg.path(d=link_d, fill=p.color, opacity=0.55, stroke="none")
-        ribbon.set_desc(title=f"{e.date.isoformat()} — {e.asset}: {_format_amount(e.amount, currency, signed=True)}")
-        dwg.add(ribbon)
-
     # trunk fill (positive/negative split) + stroke
     for seg, is_positive in fill_segments:
         if len(seg) < 2:
@@ -463,6 +426,31 @@ def render_svg(
         dwg.add(dwg.polygon(points=area_pts, fill=fill, stroke="none", opacity=0.9))
 
     dwg.add(dwg.path(d=boundary_d, fill="none", stroke=TRUNK_STROKE, stroke_width=2.5, stroke_linejoin="round"))
+
+    # dotted connector from each pill straight to its point on the trunk,
+    # with a small dot marking exactly where the event lands on the graph
+    for p in placements:
+        e = p.transition.entry
+        if e.is_status:
+            continue
+        row = p.row
+        graph_y = (p.attach_top + p.attach_bot) / 2
+        if e.amount >= 0:
+            pill_edge_y = trunk_top - STEM_GAP - row * (PILL_H + ROW_GAP_Y)
+        else:
+            pill_edge_y = trunk_bottom + STEM_GAP + row * (PILL_H + ROW_GAP_Y)
+
+        connector = dwg.line(
+            start=(p.pill_x, pill_edge_y),
+            end=(p.x, graph_y),
+            stroke=p.color,
+            stroke_width=1.6,
+            stroke_dasharray="1,3",
+            stroke_linecap="round",
+        )
+        connector.set_desc(title=f"{e.date.isoformat()} — {e.asset}: {_format_amount(e.amount, currency, signed=True)}")
+        dwg.add(connector)
+        dwg.add(dwg.circle(center=(p.x, graph_y), r=3.5, fill=p.color, stroke=SURFACE_COLOR, stroke_width=1.2))
 
     # pills
     for p in placements:
