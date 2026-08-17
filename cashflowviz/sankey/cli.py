@@ -27,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--title", default="Cash Flow", help="Chart title")
     parser.add_argument("--currency", default="", help="Currency label appended to amounts")
+    parser.add_argument(
+        "--by-date",
+        action="store_true",
+        help=(
+            "Position income/expense nodes by their actual DATE on a real timeline instead of "
+            "grouping everything from a month under one fixed column. Month-milestone hubs stay "
+            "anchored between their own month's entries and the next month's."
+        ),
+    )
     return parser
 
 
@@ -43,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         height=args.height,
         title=args.title,
         currency=args.currency,
+        date_positioned=args.by_date,
     )
     print(f"Wrote {args.out}")
 

@@ -161,15 +161,32 @@ Same `--png`, `--height`, `--title`, `--currency` flags as the main tool,
 plus `--width` (a minimum — both dimensions grow to fit the data: width with
 the number of months, height with however many rows a busy month needs).
 
+By default, all of a month's income sits in one column and all of its
+expenses in the next — a categorical layout, not a literal timeline. Add
+`--by-date` for a real proportional date axis instead: income/expense nodes
+sit at their own entry's exact date, with month-hub hubs anchored at each
+month's last calendar day (after that month's own entries, before the
+next month's). The canvas widens automatically so that the closest two
+distinct dates in the data still get clear label spacing — a tight cluster
+of same-week transactions can make for a wide image, capped at 6000px, past
+which very dense clusters may compress a little.
+
+```bash
+python -m cashflowviz.sankey InputExample-new.xlsx -o cashflow-sankey-dated.svg --by-date
+```
+
+![Example Sankey diagram, positioned by date](examples-sankey/sankey_example_bydate.svg)
+
 ### Design
 
 - `cashflowviz/sankey/data.py` — parses FROM/AMOUNT/DATE, groups entries into
   months, and builds the node/link graph (source → hub → sink, plus
   hub → hub carry-over links).
-- `cashflowviz/sankey/render.py` — lays out nodes column by column, stacks
-  same-column nodes to fit the tallest column, allocates each node's in/out
-  link "ports" to minimize crossing, and draws bezier ribbons with a
-  gradient from the source node's color to the target's.
+- `cashflowviz/sankey/render.py` — positions nodes either by fixed category
+  column or (with `--by-date`) by real date, stacks same-position nodes to
+  fit the tallest stack, allocates each node's in/out link "ports" to
+  minimize crossing, and draws bezier ribbons with a gradient from the
+  source node's color to the target's.
 - `cashflowviz/sankey/cli.py` — the `python -m cashflowviz.sankey` CLI.
 
 This tool is independent of the main `cashflowviz` package (different input

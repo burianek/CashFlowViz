@@ -1,9 +1,17 @@
 """Layout and SVG rendering for the multi-column Sankey cash flow diagram.
 
-Columns are assigned deterministically rather than via a generic Sankey
-layout algorithm, since the graph shape is known up front: income sources
-for month m sit at column 2m-1, that month's hub at column 2m, and its
-expenses (or the terminal balance, for the last month) at column 2m+1.
+Two layout modes:
+
+- categorical (default): columns are assigned deterministically rather than
+  via a generic Sankey layout algorithm, since the graph shape is known up
+  front — income sources for month m sit at column 2m-1, that month's hub at
+  column 2m, and its expenses (or the terminal balance, for the last month)
+  at column 2m+1.
+- date-positioned (``date_positioned=True``): the x-axis is a real
+  proportional date scale instead. Source/sink nodes sit at their own entry's
+  date; each hub sits at the last calendar day of its month (always after its
+  own month's entries, always before the next month's); the terminal node
+  (no date of its own) sits a fixed offset after the last hub.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ SURFACE_COLOR = "#fcfcfb"
 PRIMARY_INK = "#0b0b0b"
 SECONDARY_INK = "#52514e"
 MUTED_INK = "#898781"
+GRID_COLOR = "#e1e0d9"
 
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
@@ -33,6 +42,10 @@ NODE_GAP_Y = 14
 MIN_NODE_H = 4.0
 MIN_LABELED_NODE_H = 28.0  # source/sink bars need room for a 2-line label beside them
 LABEL_GAP = 8
+DATE_AXIS_WIDTH = 1400
+MAX_DATE_AXIS_WIDTH = 6000  # hard cap: beyond this, very dense clusters may compress a bit
+MIN_DATE_GAP_PX = 160  # min px between the two closest distinct dates, for label clearance
+TERMINAL_OFFSET = 150  # px placed after the last hub, in date-positioned mode
 
 
 def _min_node_h(node: Node) -> float:
@@ -80,6 +93,15 @@ def _sankey_link_path(x0, y0_top, y0_bot, x1, y1_top, y1_bot) -> str:
     )
 
 
+def _month_starts(min_date: dt.date, max_date: dt.date) -> list[dt.date]:
+    ticks = []
+    cur = min_date.replace(day=1)
+    while cur <= max_date:
+        ticks.append(cur)
+        cur = cur.replace(year=cur.year + 1, month=1) if cur.month == 12 else cur.replace(month=cur.month + 1)
+    return ticks
+
+
 def render_svg(
     graph: SankeyGraph,
     out_path: str,
@@ -87,42 +109,90 @@ def render_svg(
     height: int = 780,
     title: str = "Cash Flow",
     currency: str = "",
+    date_positioned: bool = False,
 ) -> str:
     if not graph.nodes:
         raise ValueError("No nodes to render")
 
     margins = _Margins()
+    if date_positioned:
+        margins.bottom = max(margins.bottom, 60)
+        # the terminal node (no date of its own) sits TERMINAL_OFFSET past the
+        # last hub, then needs its own label's width again past that
+        margins.right = max(margins.right, TERMINAL_OFFSET + 170)
     nodes_by_id = {n.id: n for n in graph.nodes}
 
-    columns = sorted({n.column for n in graph.nodes})
-    col_x = {col: margins.left + i * COLUMN_SPACING for i, col in enumerate(columns)}
-    computed_width = margins.left + (len(columns) - 1) * COLUMN_SPACING + NODE_W + margins.right
-    width = max(width or 0, computed_width)
+    # --- horizontal placement: either fixed categorical columns, or a real date scale ---
+    node_x: dict[str, float] = {}
+    stack_key: dict[str, object] = {}
+    month_tick_x: list[tuple[float, str]] = []
 
-    # --- vertical scale: find k (px per currency unit) so the densest column fits ---
-    nodes_by_col: dict[int, list[Node]] = defaultdict(list)
+    if date_positioned:
+        dated_nodes = [n for n in graph.nodes if n.date is not None]
+        min_date = min(n.date for n in dated_nodes)
+        max_date = max(n.date for n in dated_nodes)
+        span_days = max((max_date - min_date).days, 1)
+
+        # Guarantee the closest two distinct dates still get enough width apart
+        # for their labels — a plain proportional scale would let a tight
+        # cluster of same-week transactions collide into unreadable overlap.
+        unique_dates = sorted({n.date for n in dated_nodes})
+        min_gap_days = min(
+            ((b - a).days for a, b in zip(unique_dates, unique_dates[1:])), default=span_days
+        )
+        px_per_day = MIN_DATE_GAP_PX / max(min_gap_days, 1)
+        needed_plot_w = min(px_per_day * span_days, MAX_DATE_AXIS_WIDTH - margins.left - margins.right)
+        plot_w = max(DATE_AXIS_WIDTH - margins.left - margins.right, needed_plot_w, (width or 0) - margins.left - margins.right)
+        width = margins.left + margins.right + plot_w
+        plot_left, plot_right = margins.left, width - margins.right
+
+        def x_of(d: dt.date) -> float:
+            return plot_left + (d - min_date).days / span_days * (plot_right - plot_left)
+
+        for n in graph.nodes:
+            if n.date is not None:
+                node_x[n.id] = x_of(n.date)
+                stack_key[n.id] = n.date
+
+        last_hub_x = max((node_x[n.id] for n in graph.nodes if n.kind == "hub"), default=plot_left)
+        for n in graph.nodes:
+            if n.id not in node_x:  # terminal node: no date of its own
+                node_x[n.id] = last_hub_x + TERMINAL_OFFSET
+                stack_key[n.id] = ("terminal", n.id)
+
+        month_tick_x = [(x_of(d), f"{d.month:02d}/{d.year}") for d in _month_starts(min_date, max_date)]
+    else:
+        columns = sorted({n.column for n in graph.nodes})
+        col_x = {col: margins.left + i * COLUMN_SPACING for i, col in enumerate(columns)}
+        width = max(width or 0, margins.left + (len(columns) - 1) * COLUMN_SPACING + NODE_W + margins.right)
+        for n in graph.nodes:
+            node_x[n.id] = col_x[n.column]
+            stack_key[n.id] = n.column
+
+    # --- vertical scale: find k (px per currency unit) so the densest stack fits ---
+    nodes_by_group: dict[object, list[Node]] = defaultdict(list)
     for n in graph.nodes:
-        nodes_by_col[n.column].append(n)
-    for col_nodes in nodes_by_col.values():
-        col_nodes.sort(key=lambda n: (n.date or dt.date.min, n.kind, n.label))
+        nodes_by_group[stack_key[n.id]].append(n)
+    for group_nodes in nodes_by_group.values():
+        group_nodes.sort(key=lambda n: (n.date or dt.date.min, n.kind, n.label))
 
     plot_top = margins.top
     plot_h = height - margins.top - margins.bottom
     k = plot_h
-    for col_nodes in nodes_by_col.values():
-        total_value = sum(n.value for n in col_nodes)
+    for group_nodes in nodes_by_group.values():
+        total_value = sum(n.value for n in group_nodes)
         if total_value <= 0:
             continue
-        gap_budget = (len(col_nodes) - 1) * NODE_GAP_Y
+        gap_budget = (len(group_nodes) - 1) * NODE_GAP_Y
         bound = max(plot_h - gap_budget, 10.0) / total_value
         k = min(k, bound)
 
-    # --- stack nodes top-down within each column ---
+    # --- stack nodes top-down within each group ---
     y_top: dict[str, float] = {}
     y_bottom: dict[str, float] = {}
-    for col_nodes in nodes_by_col.values():
+    for group_nodes in nodes_by_group.values():
         cursor = plot_top
-        for n in col_nodes:
+        for n in group_nodes:
             h = max(n.value * k, _min_node_h(n))
             y_top[n.id] = cursor
             y_bottom[n.id] = cursor + h
@@ -168,6 +238,22 @@ def render_svg(
     dwg = svgwrite.Drawing(out_path, size=(width, total_height), profile="full")
     dwg.add(dwg.rect(insert=(0, 0), size=(width, total_height), fill=SURFACE_COLOR))
 
+    if date_positioned:
+        for mx, mlabel in month_tick_x:
+            dwg.add(
+                dwg.line(start=(mx, plot_top - 10), end=(mx, content_bottom), stroke=GRID_COLOR, stroke_width=1)
+            )
+            dwg.add(
+                dwg.text(
+                    mlabel,
+                    insert=(mx, content_bottom + 20),
+                    font_size="11px",
+                    font_family=FONT_FAMILY,
+                    fill=MUTED_INK,
+                    text_anchor="middle",
+                )
+            )
+
     dwg.add(
         dwg.text(
             title,
@@ -190,8 +276,8 @@ def render_svg(
     # links (under nodes), each a gradient from its source node's color to its target's
     for idx, l in enumerate(graph.links):
         src, tgt = nodes_by_id[l.source], nodes_by_id[l.target]
-        x0 = col_x[src.column] + NODE_W
-        x1 = col_x[tgt.column]
+        x0 = node_x[src.id] + NODE_W
+        x1 = node_x[tgt.id]
         sy0, sy1 = source_port[id(l)]
         ty0, ty1 = target_port[id(l)]
         grad_id = f"linkgrad{idx}"
@@ -205,7 +291,7 @@ def render_svg(
 
     # nodes
     for n in graph.nodes:
-        x = col_x[n.column]
+        x = node_x[n.id]
         yt, yb = y_top[n.id], y_bottom[n.id]
         group = dwg.g()
         group.add(

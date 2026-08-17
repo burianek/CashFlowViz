@@ -10,6 +10,7 @@ forward to the next month.
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from dataclasses import dataclass
 
@@ -35,6 +36,13 @@ CZECH_MONTHS = {
 
 def month_label(year: int, month: int) -> str:
     return f"{CZECH_MONTHS[month]} {year}"
+
+
+def month_end(year: int, month: int) -> dt.date:
+    """Last calendar day of the month — always on/after every entry dated in
+    it and strictly before the next month's entries, so it's a safe anchor
+    point for a month-milestone node on a real date axis."""
+    return dt.date(year, month, calendar.monthrange(year, month)[1])
 
 
 @dataclass(frozen=True)
@@ -142,7 +150,9 @@ def build_graph(entries: list[FlowEntry]) -> SankeyGraph:
     for ym in months:
         hub_id = f"HUB:{ym[0]}-{ym[1]:02d}"
         hub_id_of[ym] = hub_id
-        nodes[hub_id] = Node(id=hub_id, label=month_label(*ym), kind="hub", column=2 * month_index[ym])
+        nodes[hub_id] = Node(
+            id=hub_id, label=month_label(*ym), kind="hub", column=2 * month_index[ym], date=month_end(*ym)
+        )
 
     for e in entries:
         if e.amount == 0:
