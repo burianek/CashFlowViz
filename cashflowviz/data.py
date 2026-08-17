@@ -1,4 +1,4 @@
-"""Parse the CashFlowViz input workbook and compute a day-by-day balance series."""
+"""Parse the CashFlowViz input workbook and compute balance transitions."""
 
 from __future__ import annotations
 
@@ -19,10 +19,12 @@ class Entry:
 
 
 @dataclass(frozen=True)
-class DayBalance:
-    date: dt.date
-    balance: float
-    events: tuple[Entry, ...]
+class Transition:
+    """One entry's effect on the running balance, in chronological order."""
+
+    entry: Entry
+    level_before: float
+    level_after: float
 
 
 def _to_date(value) -> dt.date:
@@ -81,31 +83,20 @@ def read_entries(xlsx_path: str) -> list[Entry]:
     return entries
 
 
-def compute_daily_balance(entries: list[Entry]) -> list[DayBalance]:
-    """Expand entries into a continuous day-by-day balance series.
+def compute_transitions(entries: list[Entry]) -> list[Transition]:
+    """Order entries chronologically and compute the balance before/after each.
 
-    STATUS rows set the balance to an absolute value on their date. All other
-    rows add their amount to the running balance on their date. Days without
-    events carry the previous day's balance forward.
+    STATUS entries set the balance to an absolute value; every other entry
+    adds its amount to the running balance. Same-day entries keep their
+    original spreadsheet order (stable sort).
     """
-    start = min(e.date for e in entries)
-    end = max(e.date for e in entries)
+    ordered = sorted(entries, key=lambda e: e.date)
 
-    by_date: dict[dt.date, list[Entry]] = {}
-    for e in entries:
-        by_date.setdefault(e.date, []).append(e)
+    transitions: list[Transition] = []
+    level = 0.0
+    for entry in ordered:
+        level_before = level
+        level = entry.amount if entry.is_status else level + entry.amount
+        transitions.append(Transition(entry=entry, level_before=level_before, level_after=level))
 
-    days: list[DayBalance] = []
-    balance = 0.0
-    current = start
-    while current <= end:
-        todays_events = tuple(by_date.get(current, ()))
-        for event in todays_events:
-            if event.is_status:
-                balance = event.amount
-            else:
-                balance += event.amount
-        days.append(DayBalance(date=current, balance=balance, events=todays_events))
-        current += dt.timedelta(days=1)
-
-    return days
+    return transitions
