@@ -46,10 +46,18 @@ DATE_AXIS_WIDTH = 1400
 LANE_GAP_X = 24  # horizontal buffer required between two nodes' footprints before they can share a lane
 TARGET_MAX_BAR_H = 260.0  # date mode: pixel height of the single largest-value node
 TERMINAL_OFFSET = 150  # px placed after the last hub, in date-positioned mode
+HUB_LABEL_BELOW = 38.0  # hub's 2-line label sits entirely below its bar, unlike source/sink's
 
 
 def _min_node_h(node: Node) -> float:
     return MIN_LABELED_NODE_H if node.kind in ("source", "sink", "terminal") else MIN_NODE_H
+
+
+def _lane_reservation_h(node: Node, bar_h: float) -> float:
+    """Vertical space this node needs reserved in its lane, bar plus any part
+    of its label that falls outside the bar's own rectangle (only the hub's
+    label does — it's centered below the bar rather than beside it)."""
+    return bar_h + HUB_LABEL_BELOW if node.kind == "hub" else bar_h
 
 
 @dataclass
@@ -215,7 +223,8 @@ def render_svg(
         lane_count = max(lane_of.values(), default=-1) + 1
         lane_tallest = [0.0] * lane_count
         for n in graph.nodes:
-            lane_tallest[lane_of[n.id]] = max(lane_tallest[lane_of[n.id]], node_h[n.id])
+            reservation = _lane_reservation_h(n, node_h[n.id])
+            lane_tallest[lane_of[n.id]] = max(lane_tallest[lane_of[n.id]], reservation)
 
         lane_y_start = []
         cursor = plot_top
@@ -228,7 +237,7 @@ def render_svg(
             y_top[n.id] = yt
             y_bottom[n.id] = yt + node_h[n.id]
 
-        content_bottom = max(y_bottom.values())
+        content_bottom = max(_lane_reservation_h(n, 0) + y_bottom[n.id] for n in graph.nodes)
         total_height = max(height, content_bottom + margins.bottom)
     else:
         # --- fixed categorical columns ---
