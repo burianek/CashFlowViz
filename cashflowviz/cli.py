@@ -5,14 +5,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .data import read_entries
+from .io import read_flow_entries
 from .render import render_png, render_svg
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cashflowviz",
-        description="Render a company cashflow XLSX as a per-asset cash flow diagram (SVG/PNG).",
+        description="Render a FROM/AMOUNT/DATE cashflow XLSX as a per-asset cash flow diagram (SVG/PNG).",
     )
     parser.add_argument("input", help="Path to the input .xlsx file")
     parser.add_argument(
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    entries = read_entries(args.input)
+    entries = read_flow_entries(args.input)
     render_svg(
         entries,
         args.out,

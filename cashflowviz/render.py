@@ -43,7 +43,7 @@ TRUNK_NEGATIVE_STROKE = "#b64a48"
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
 MIN_LABEL_W = 6.0
-STATUS_MARKER_COLOR = "#5b6472"
+DEFAULT_MARKER_COLOR = "#5b6472"
 PILL_H = 24
 PILL_PAD_X = 10
 ROW_GAP_Y = 12
@@ -184,11 +184,9 @@ def render_svg(
     # --- assign colors -------------------------------------------------
     color_of_asset: dict[str, str] = {}
     for t in transitions:
-        if t.entry.is_status:
-            continue
-        if t.entry.asset not in color_of_asset:
+        if t.entry.name not in color_of_asset:
             idx = len(color_of_asset)
-            color_of_asset[t.entry.asset] = (
+            color_of_asset[t.entry.name] = (
                 ASSET_PALETTE[idx] if idx < len(ASSET_PALETTE) else OVERFLOW_COLOR
             )
 
@@ -216,7 +214,7 @@ def render_svg(
         prev_x = placements[i - 1].x if i > 0 else x_left
         next_x = placements[i + 1].x if i + 1 < len(placements) else x_right
         p.half_width = max(min(18.0, 0.4 * (p.x - prev_x), 0.4 * (next_x - p.x)), 2.0)
-        p.color = color_of_asset.get(p.transition.entry.asset, STATUS_MARKER_COLOR)
+        p.color = color_of_asset.get(p.transition.entry.name, DEFAULT_MARKER_COLOR)
 
     # --- vertical scale ---------------------------------------------------
     all_levels = [t.level_before for t in transitions] + [t.level_after for t in transitions]
@@ -230,9 +228,7 @@ def render_svg(
     in_items, out_items = [], []
     for p in placements:
         e = p.transition.entry
-        if e.is_status:
-            continue
-        label = f"{e.asset}: {_format_amount(e.amount, currency, signed=True)}"
+        label = f"{e.name}: {_format_amount(e.amount, currency, signed=True)}"
         w = max(_estimate_text_width(label) + PILL_PAD_X * 2, MIN_LABEL_W)
         p.label_w = w
         p.pill_x = min(max(p.x, x_left + w / 2), x_right - w / 2)
@@ -282,15 +278,9 @@ def render_svg(
     sample_points: list[tuple[float, float]] = []
     path_cmds: list[str] = []
 
-    first = placements[0]
-    if first.transition.entry.is_status:
-        cursor_x = x_left
-        cursor_level = first.transition.level_after
-        rest = placements[1:]
-    else:
-        cursor_x = x_left
-        cursor_level = first.transition.level_before
-        rest = placements
+    cursor_x = x_left
+    cursor_level = placements[0].transition.level_before
+    rest = placements
 
     path_cmds.append(f"M {cursor_x:.2f},{y_of(cursor_level):.2f}")
     sample_points.append((cursor_x, y_of(cursor_level)))
@@ -431,8 +421,6 @@ def render_svg(
     # with a small dot marking exactly where the event lands on the graph
     for p in placements:
         e = p.transition.entry
-        if e.is_status:
-            continue
         row = p.row
         graph_y = (p.attach_top + p.attach_bot) / 2
         if e.amount >= 0:
@@ -448,16 +436,14 @@ def render_svg(
             stroke_dasharray="1,3",
             stroke_linecap="round",
         )
-        connector.set_desc(title=f"{e.date.isoformat()} — {e.asset}: {_format_amount(e.amount, currency, signed=True)}")
+        connector.set_desc(title=f"{e.date.isoformat()} — {e.name}: {_format_amount(e.amount, currency, signed=True)}")
         dwg.add(connector)
         dwg.add(dwg.circle(center=(p.x, graph_y), r=3.5, fill=p.color, stroke=SURFACE_COLOR, stroke_width=1.2))
 
     # pills
     for p in placements:
         e = p.transition.entry
-        if e.is_status:
-            continue
-        label = f"{e.asset}: {_format_amount(e.amount, currency, signed=True)}"
+        label = f"{e.name}: {_format_amount(e.amount, currency, signed=True)}"
         w = p.label_w
         row = p.row
         if e.amount >= 0:
@@ -492,19 +478,16 @@ def render_svg(
         group.set_desc(title=f"{e.date.isoformat()} — {label}")
         dwg.add(group)
 
-    # opening balance label
-    status_entries = [t for t in transitions if t.entry.is_status]
-    if status_entries:
-        s = status_entries[0]
-        dwg.add(
-            dwg.text(
-                f"Start: {_format_amount(s.level_after, currency)}  ({s.entry.date.isoformat()})",
-                insert=(x_left, trunk_top - 10),
-                font_size="12px",
-                font_family=FONT_FAMILY,
-                fill=SECONDARY_INK,
-            )
+    # opening and closing balance labels
+    dwg.add(
+        dwg.text(
+            f"Start: {_format_amount(transitions[0].level_after, currency)}  ({start_date.isoformat()})",
+            insert=(x_left, trunk_top - 10),
+            font_size="12px",
+            font_family=FONT_FAMILY,
+            fill=SECONDARY_INK,
         )
+    )
     dwg.add(
         dwg.text(
             f"End: {_format_amount(transitions[-1].level_after, currency)}  ({end_date.isoformat()})",
