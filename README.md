@@ -164,12 +164,14 @@ the number of months, height with however many rows a busy month needs).
 By default, all of a month's income sits in one column and all of its
 expenses in the next — a categorical layout, not a literal timeline. Add
 `--by-date` for a real proportional date axis instead: income/expense nodes
-sit at their own entry's exact date, with month-hub hubs anchored at each
-month's last calendar day (after that month's own entries, before the
-next month's). The canvas widens automatically so that the closest two
-distinct dates in the data still get clear label spacing — a tight cluster
-of same-week transactions can make for a wide image, capped at 6000px, past
-which very dense clusters may compress a little.
+sit at their own entry's exact date, with month hubs anchored at each
+month's last calendar day (after that month's own entries, before the next
+month's). No two nodes' bars or labels ever overlap horizontally: when two
+entries fall close enough in time that their labels would collide, one is
+placed in an additional vertical lane instead — like a Gantt chart — rather
+than stretching the whole canvas to fit the tightest date gap. A busy week
+makes for a *taller* image, not a comically wide one; width only grows with
+`--width` or the overall date span.
 
 ```bash
 python -m cashflowviz.sankey InputExample-new.xlsx -o cashflow-sankey-dated.svg --by-date

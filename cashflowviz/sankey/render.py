@@ -43,8 +43,8 @@ MIN_NODE_H = 4.0
 MIN_LABELED_NODE_H = 28.0  # source/sink bars need room for a 2-line label beside them
 LABEL_GAP = 8
 DATE_AXIS_WIDTH = 1400
-MAX_DATE_AXIS_WIDTH = 6000  # hard cap: beyond this, very dense clusters may compress a bit
-MIN_DATE_GAP_PX = 160  # min px between the two closest distinct dates, for label clearance
+LANE_GAP_X = 24  # horizontal buffer required between two nodes' footprints before they can share a lane
+TARGET_MAX_BAR_H = 260.0  # date mode: pixel height of the single largest-value node
 TERMINAL_OFFSET = 150  # px placed after the last hub, in date-positioned mode
 
 
@@ -102,6 +102,42 @@ def _month_starts(min_date: dt.date, max_date: dt.date) -> list[dt.date]:
     return ticks
 
 
+def _estimate_text_width(text: str, font_px: float = 12.0) -> float:
+    return len(text) * font_px * 0.6
+
+
+def _assign_lanes(footprints: list[tuple[str, float, float, int | None]]) -> dict[str, int]:
+    """Greedy interval scheduling: pack (node_id, left, right, forced_lane)
+    footprints into the fewest lanes such that nothing in the same lane
+    overlaps. Items with a non-None forced_lane (month hubs, pinned to lane 0
+    so they stay aligned with the plot's top edge) are placed first, in their
+    own x order, so free items placed afterward correctly route around them."""
+    lane_right: list[float] = []
+    lane_of: dict[str, int] = {}
+
+    forced = sorted((f for f in footprints if f[3] is not None), key=lambda f: f[1])
+    free = sorted((f for f in footprints if f[3] is None), key=lambda f: f[1])
+
+    for node_id, _left, right, lane in forced:
+        while len(lane_right) <= lane:
+            lane_right.append(float("-inf"))
+        lane_right[lane] = max(lane_right[lane], right)
+        lane_of[node_id] = lane
+
+    for node_id, left, right, _lane in free:
+        placed = False
+        for i, r in enumerate(lane_right):
+            if left >= r + LANE_GAP_X:
+                lane_right[i] = right
+                lane_of[node_id] = i
+                placed = True
+                break
+        if not placed:
+            lane_right.append(right)
+            lane_of[node_id] = len(lane_right) - 1
+    return lane_of
+
+
 def render_svg(
     graph: SankeyGraph,
     out_path: str,
@@ -122,28 +158,19 @@ def render_svg(
         margins.right = max(margins.right, TERMINAL_OFFSET + 170)
     nodes_by_id = {n.id: n for n in graph.nodes}
 
-    # --- horizontal placement: either fixed categorical columns, or a real date scale ---
     node_x: dict[str, float] = {}
-    stack_key: dict[str, object] = {}
+    y_top: dict[str, float] = {}
+    y_bottom: dict[str, float] = {}
     month_tick_x: list[tuple[float, str]] = []
+    plot_top = margins.top
 
     if date_positioned:
+        # --- horizontal: a real proportional date scale ---
         dated_nodes = [n for n in graph.nodes if n.date is not None]
         min_date = min(n.date for n in dated_nodes)
         max_date = max(n.date for n in dated_nodes)
         span_days = max((max_date - min_date).days, 1)
-
-        # Guarantee the closest two distinct dates still get enough width apart
-        # for their labels — a plain proportional scale would let a tight
-        # cluster of same-week transactions collide into unreadable overlap.
-        unique_dates = sorted({n.date for n in dated_nodes})
-        min_gap_days = min(
-            ((b - a).days for a, b in zip(unique_dates, unique_dates[1:])), default=span_days
-        )
-        px_per_day = MIN_DATE_GAP_PX / max(min_gap_days, 1)
-        needed_plot_w = min(px_per_day * span_days, MAX_DATE_AXIS_WIDTH - margins.left - margins.right)
-        plot_w = max(DATE_AXIS_WIDTH - margins.left - margins.right, needed_plot_w, (width or 0) - margins.left - margins.right)
-        width = margins.left + margins.right + plot_w
+        width = max(width or 0, DATE_AXIS_WIDTH)
         plot_left, plot_right = margins.left, width - margins.right
 
         def x_of(d: dt.date) -> float:
@@ -152,54 +179,91 @@ def render_svg(
         for n in graph.nodes:
             if n.date is not None:
                 node_x[n.id] = x_of(n.date)
-                stack_key[n.id] = n.date
 
         last_hub_x = max((node_x[n.id] for n in graph.nodes if n.kind == "hub"), default=plot_left)
         for n in graph.nodes:
             if n.id not in node_x:  # terminal node: no date of its own
                 node_x[n.id] = last_hub_x + TERMINAL_OFFSET
-                stack_key[n.id] = ("terminal", n.id)
 
         month_tick_x = [(x_of(d), f"{d.month:02d}/{d.year}") for d in _month_starts(min_date, max_date)]
+
+        # --- vertical: each node's height reflects only its own value ---
+        target_h = min(TARGET_MAX_BAR_H, max((height - margins.top - margins.bottom) * 0.9, 40.0))
+        max_value = max((n.value for n in graph.nodes), default=1.0) or 1.0
+        k = target_h / max_value
+        node_h = {n.id: max(n.value * k, _min_node_h(n)) for n in graph.nodes}
+
+        # --- pack every node into as few vertical lanes as needed so no two
+        # labels/bars ever overlap horizontally, instead of stretching the
+        # whole canvas to fit the tightest date gap. Month hubs are pinned to
+        # lane 0 (so they stay aligned with the plot's top edge) and placed
+        # first, so source/sink/terminal nodes route around them too. ---
+        def _label_w(n: Node) -> float:
+            return max(_estimate_text_width(n.label, 12), _estimate_text_width(_format_amount(n.value, currency), 11))
+
+        footprints: list[tuple[str, float, float, int | None]] = []
+        for n in graph.nodes:
+            x, w = node_x[n.id], _label_w(n)
+            if n.kind == "source":
+                footprints.append((n.id, x - LABEL_GAP - w, x + NODE_W, None))
+            elif n.kind == "hub":
+                footprints.append((n.id, x + NODE_W / 2 - w / 2, x + NODE_W / 2 + w / 2, 0))
+            else:  # sink, terminal
+                footprints.append((n.id, x, x + NODE_W + LABEL_GAP + w, None))
+
+        lane_of = _assign_lanes(footprints)
+        lane_count = max(lane_of.values(), default=-1) + 1
+        lane_tallest = [0.0] * lane_count
+        for n in graph.nodes:
+            lane_tallest[lane_of[n.id]] = max(lane_tallest[lane_of[n.id]], node_h[n.id])
+
+        lane_y_start = []
+        cursor = plot_top
+        for tallest in lane_tallest:
+            lane_y_start.append(cursor)
+            cursor += tallest + NODE_GAP_Y
+
+        for n in graph.nodes:
+            yt = lane_y_start[lane_of[n.id]]
+            y_top[n.id] = yt
+            y_bottom[n.id] = yt + node_h[n.id]
+
+        content_bottom = max(y_bottom.values())
+        total_height = max(height, content_bottom + margins.bottom)
     else:
+        # --- fixed categorical columns ---
         columns = sorted({n.column for n in graph.nodes})
         col_x = {col: margins.left + i * COLUMN_SPACING for i, col in enumerate(columns)}
         width = max(width or 0, margins.left + (len(columns) - 1) * COLUMN_SPACING + NODE_W + margins.right)
         for n in graph.nodes:
             node_x[n.id] = col_x[n.column]
-            stack_key[n.id] = n.column
 
-    # --- vertical scale: find k (px per currency unit) so the densest stack fits ---
-    nodes_by_group: dict[object, list[Node]] = defaultdict(list)
-    for n in graph.nodes:
-        nodes_by_group[stack_key[n.id]].append(n)
-    for group_nodes in nodes_by_group.values():
-        group_nodes.sort(key=lambda n: (n.date or dt.date.min, n.kind, n.label))
+        nodes_by_col: dict[int, list[Node]] = defaultdict(list)
+        for n in graph.nodes:
+            nodes_by_col[n.column].append(n)
+        for col_nodes in nodes_by_col.values():
+            col_nodes.sort(key=lambda n: (n.date or dt.date.min, n.kind, n.label))
 
-    plot_top = margins.top
-    plot_h = height - margins.top - margins.bottom
-    k = plot_h
-    for group_nodes in nodes_by_group.values():
-        total_value = sum(n.value for n in group_nodes)
-        if total_value <= 0:
-            continue
-        gap_budget = (len(group_nodes) - 1) * NODE_GAP_Y
-        bound = max(plot_h - gap_budget, 10.0) / total_value
-        k = min(k, bound)
+        plot_h = height - margins.top - margins.bottom
+        k = plot_h
+        for col_nodes in nodes_by_col.values():
+            total_value = sum(n.value for n in col_nodes)
+            if total_value <= 0:
+                continue
+            gap_budget = (len(col_nodes) - 1) * NODE_GAP_Y
+            bound = max(plot_h - gap_budget, 10.0) / total_value
+            k = min(k, bound)
 
-    # --- stack nodes top-down within each group ---
-    y_top: dict[str, float] = {}
-    y_bottom: dict[str, float] = {}
-    for group_nodes in nodes_by_group.values():
-        cursor = plot_top
-        for n in group_nodes:
-            h = max(n.value * k, _min_node_h(n))
-            y_top[n.id] = cursor
-            y_bottom[n.id] = cursor + h
-            cursor += h + NODE_GAP_Y
+        for col_nodes in nodes_by_col.values():
+            cursor = plot_top
+            for n in col_nodes:
+                h = max(n.value * k, _min_node_h(n))
+                y_top[n.id] = cursor
+                y_bottom[n.id] = cursor + h
+                cursor += h + NODE_GAP_Y
 
-    content_bottom = max(y_bottom.values())
-    total_height = max(height, content_bottom + margins.bottom)
+        content_bottom = max(y_bottom.values())
+        total_height = max(height, content_bottom + margins.bottom)
 
     # --- allocate link ports on each node's in/out edges, ordered to reduce crossings ---
     out_links: dict[str, list[Link]] = defaultdict(list)
