@@ -81,7 +81,31 @@ class SankeyGraph:
     links: list[Link]
 
 
-def build_graph(entries: list[FlowEntry]) -> SankeyGraph:
+def _merge_same_month(entries: list[FlowEntry]) -> list[FlowEntry]:
+    """Combine entries that share a FROM name within the same calendar month
+    into a single entry (amounts summed, earliest date kept). Entries for the
+    same name in different months are left as separate entries."""
+    groups: dict[tuple[str, int, int], list[FlowEntry]] = {}
+    order: list[tuple[str, int, int]] = []
+    for e in entries:
+        key = (e.name, e.date.year, e.date.month)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(e)
+
+    merged: list[FlowEntry] = []
+    for key in order:
+        group = groups[key]
+        name = key[0]
+        merged.append(FlowEntry(name=name, amount=sum(e.amount for e in group), date=min(e.date for e in group)))
+    return merged
+
+
+def build_graph(entries: list[FlowEntry], merge_same_month: bool = False) -> SankeyGraph:
+    if merge_same_month:
+        entries = _merge_same_month(entries)
+
     months = sorted({(e.date.year, e.date.month) for e in entries})
     month_index = {ym: i for i, ym in enumerate(months)}
 

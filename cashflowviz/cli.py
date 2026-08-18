@@ -21,7 +21,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--png", default=None, help="Also export a PNG to this path (requires cairosvg)"
     )
-    parser.add_argument("--width", type=int, default=1200, help="SVG width in px")
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=1200,
+        help="Graph width in px. Sets the SVG's width exactly; --png follows it proportionally (2x, for a crisp retina-quality image).",
+    )
     parser.add_argument(
         "--height", type=int, default=820, help="Minimum SVG height in px (grows to fit labels)"
     )

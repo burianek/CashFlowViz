@@ -21,7 +21,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--png", default=None, help="Also export a PNG to this path (requires cairosvg)"
     )
-    parser.add_argument("--width", type=int, default=None, help="Minimum SVG width in px (grows to fit columns)")
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help=(
+            "Minimum graph width in px (grows past it to fit columns/lanes if the content needs "
+            "more room). Governs the SVG's actual width; --png follows it proportionally (2x, for "
+            "a crisp retina-quality image)."
+        ),
+    )
     parser.add_argument(
         "--height", type=int, default=780, help="Minimum SVG height in px (grows to fit stacked nodes)"
     )
@@ -36,6 +45,16 @@ def build_parser() -> argparse.ArgumentParser:
             "anchored between their own month's entries and the next month's."
         ),
     )
+    parser.add_argument(
+        "--merge-same-month",
+        action="store_true",
+        help=(
+            "Combine FROM rows that share a name within the same calendar month into a single "
+            "node (amounts summed) instead of auto-numbering each one. Only valid in the default "
+            "categorical column layout — incompatible with --by-date, where each row keeps its "
+            "own point on the timeline."
+        ),
+    )
     return parser
 
 
@@ -43,8 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.merge_same_month and args.by_date:
+        parser.error("--merge-same-month cannot be used with --by-date")
+
     entries = read_flow_entries(args.input)
-    graph = build_graph(entries)
+    graph = build_graph(entries, merge_same_month=args.merge_same_month)
     render_svg(
         graph,
         args.out,

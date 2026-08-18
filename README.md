@@ -91,7 +91,7 @@ Options:
 |---|---|---|
 | `-o, --out` | `cashflow.svg` | Output SVG path |
 | `--png` | *(none)* | Also export a PNG to this path |
-| `--width` | `1200` | SVG width in px |
+| `--width` | `1200` | Graph width in px — sets the SVG exactly; `--png` follows it proportionally (2x, for a crisp image) |
 | `--height` | `820` | Minimum SVG height in px — grows automatically to fit stacked labels when many transactions land close together |
 | `--title` | `Cash Flow Balance` | Chart title |
 | `--currency` | *(empty)* | Currency label appended to amounts, e.g. `Kč` |
@@ -149,11 +149,12 @@ Options:
 |---|---|---|
 | `-o, --out` | `cashflow-sankey.svg` | Output SVG path |
 | `--png` | *(none)* | Also export a PNG to this path |
-| `--width` | *(auto)* | Minimum SVG width in px — grows to fit the number of months |
+| `--width` | *(auto)* | Minimum graph width in px — grows to fit the number of months. Governs the SVG exactly; `--png` follows it proportionally (2x, for a crisp image) |
 | `--height` | `780` | Minimum SVG height in px — grows to fit however many rows a busy month needs |
 | `--title` | `Cash Flow` | Chart title |
 | `--currency` | *(empty)* | Currency label appended to amounts |
 | `--by-date` | off | Position nodes by real date instead of by category column (see below) |
+| `--merge-same-month` | off | Combine FROM rows sharing a name within the same month into one node, amounts summed (see below). Not compatible with `--by-date` |
 
 By default, all of a month's income sits in one column and all of its
 expenses in the next — a categorical layout, not a literal timeline. Add
@@ -173,10 +174,26 @@ python -m cashflowviz.sankey InputExample-new.xlsx -o cashflow-sankey-dated.svg 
 
 ![Example Sankey diagram, positioned by date](examples-sankey/sankey_example_bydate.svg)
 
+By default, repeated FROM names are auto-numbered (see [Input format](#input-format)
+above) so every row keeps its own node, even multiple rows in the same
+month. Add `--merge-same-month` to combine those same-month repeats into a
+single node instead — amounts summed, node dated at the earliest of the
+merged rows — so e.g. three separate `Internet` charges in August collapse
+into one `Internet` node rather than `Internet`, `Internet 2`, `Internet 3`.
+Rows sharing a name across *different* months are never merged, only within
+one. This only makes sense for the categorical column layout — each row
+keeps its own point on the timeline in `--by-date` mode, so the two flags
+are mutually exclusive (the CLI rejects combining them).
+
+```bash
+python -m cashflowviz.sankey InputExample-new.xlsx -o cashflow-sankey-merged.svg --merge-same-month
+```
+
 ### Design
 
-- `cashflowviz/sankey/data.py` — groups entries into months and builds the
-  node/link graph (source → hub → sink, plus hub → hub carry-over links).
+- `cashflowviz/sankey/data.py` — optionally merges same-month same-name
+  entries, groups entries into months, and builds the node/link graph
+  (source → hub → sink, plus hub → hub carry-over links).
 - `cashflowviz/sankey/render.py` — positions nodes either by fixed category
   column or (with `--by-date`) by real date, packs nodes into vertical lanes
   to avoid any overlap, allocates each node's in/out link "ports" to
